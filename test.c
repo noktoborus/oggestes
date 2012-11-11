@@ -13,6 +13,14 @@
 
 #define OGG_BFSZ 2048
 
+struct stream_cum
+{
+	ogg_stream_state state;
+	ogg_page page;
+	vorbis_info vinfo;
+	vorbis_comment vcomm;
+};
+
 void
 print_vorbis (ogg_packet *packet, vorbis_info *vinfo, vorbis_comment *vcom)
 {
@@ -43,7 +51,7 @@ print_vorbis (ogg_packet *packet, vorbis_info *vinfo, vorbis_comment *vcom)
 					break;
 				case 1:
 					printf ("<vorbis user_comments=%p, comment_lengths=%p, comments=%d, vendor='%s'>\n",
-							vcom->user_comments, vcom->comment_lengths, vcom->comments, vcom->vendor);
+							(void*)vcom->user_comments, (void*)vcom->comment_lengths, vcom->comments, vcom->vendor);
 					for (i = 0; i < vcom->comments; i ++)
 					{
 						printf ("<comment '%s'>\n", vcom->user_comments[i]);
@@ -133,67 +141,81 @@ print_ogss (ogg_sync_state *ogss)
 			ogss->unsynced, ogss->headerbytes, ogss->bodybytes);
 }
 
-int
-main (int argc, char *argv[])
+void
+process_page (struct stream_cum *stream, ogg_sync_state *state)
 {
-	vorbis_info vinfo;
-	vorbis_comment vcom;
-	ogg_stream_state og_sstate;
-	ogg_sync_state og_sync;
-	ogg_page og_page;
+	// TODO
+	return;
+}
+
+void
+process_fd (int fd)
+{
 	char *buffer;
-	int fio;
-	int r;
-	int wrc = 0;
-	if (argc < 2)
-	{
-		perror ("input file not set");
-		return -1;
-	}
-	fio = open (argv[1], O_RDONLY);
-	if (fio == -1) {
-		perror ("can't open input file");
-		return EXIT_FAILURE;
-	}
-	ogg_sync_init (&og_sync);
-	vorbis_info_init (&vinfo);
-	vorbis_comment_init (&vcom);
+	struct stream_cum stream;
+	ogg_sync_state state;
+	ogg_sync_init (&state);
+	int ret;
+	vorbis_comment_init (&stream.vcomm);
+	vorbis_info_init (&stream.vinfo);
 	while (true)
 	{
-		r = ogg_sync_pageseek (&og_sync, &og_page);
-		if (r < 0)
-			printf ("hole in %d bytes\n", -r);
-		else
-		if (r > 0)
+		ret = ogg_sync_pageseek (&state, &stream.page);
+
+		if (ret > 0)
 		{
-			print_ogp (&og_page, false, &og_sstate, &vinfo, &vcom);
+			process_page (&stream, &state);
 		}
 		else
+		if (!ret)
 		{
-			buffer = ogg_sync_buffer (&og_sync, OGG_BFSZ);
-			r = read (fio, buffer, OGG_BFSZ);
-			if (r > 0)
+			buffer = ogg_sync_buffer (&state, OGG_BFSZ);
+			if (buffer)
 			{
-				ogg_sync_wrote (&og_sync, r);
-				wrc += r;
+				ret = read (fd, buffer, OGG_BFSZ);
+				if (ret > 0)
+				{
+					ogg_sync_wrote (&state, ret);
+				}
+				else
+				{
+					// EOF or exception gained
+					break;
+				}
 			}
 			else
 			{
-				// end of stream or stream error
-				// (read () returns exception), exit
-				printf ("@@ EOF %d\n", r);
-				// XXX: wtf?
-				//ogg_sync_wrote (&og_sync, 0);
-				break;
+				// TODO: update error counter
 			}
 		}
+		else
+		{
+			// TODO: update error counter
+		}
 	}
-	ogg_sync_clear (&og_sync);
-	ogg_stream_clear (&og_sstate);
-	vorbis_info_clear (&vinfo);
-	vorbis_comment_clear (&vcom);
-	close (fio);
-	printf ("wrc: %d\n", wrc);
+	//
+	vorbis_comment_clear (&stream.vcomm);
+	vorbis_info_clear (&stream.vinfo);
+	ogg_sync_clear (&state);
+}
+
+int
+main (int argc, char *argv[])
+{
+	int fd;
+	if (argc < 2)
+	{
+		perror ("input file not set");
+		return EXIT_FAILURE;
+	}
+	fd = open (argv[1], O_RDONLY);
+	if (fd == -1)
+	{
+		perror ("open");
+		return EXIT_FAILURE;
+	}
+	process_fd (fd);
+	close (fd);
 	return EXIT_SUCCESS;
 }
 
