@@ -15,10 +15,11 @@
 
 struct stream_cum
 {
+	uint32_t serial;
 	ogg_stream_state state;
-	ogg_page page;
 	vorbis_info vinfo;
 	vorbis_comment vcomm;
+	struct stream_cum *next;
 };
 
 void
@@ -142,7 +143,52 @@ print_ogss (ogg_sync_state *ogss)
 }
 
 void
-process_page (struct stream_cum *stream, ogg_sync_state *state)
+stream_init (struct stream_cum *stream)
+{
+	memset (stream, 0, sizeof (struct stream_cum));
+	vorbis_comment_init (&stream->vcomm);
+	vorbis_info_init (&stream->vinfo);
+}
+
+void
+stream_end (struct stream_cum *stream)
+{
+	vorbis_comment_clear (&stream->vcomm);
+	vorbis_info_clear (&stream->vinfo);
+}
+
+struct stream_cum *streamlist_check (struct stream_cum *pstream, uint32_t serial)
+{
+	register struct stream_cum *lpstream = NULL;
+	while (pstream && (pstream->serial != serial && (pstream = (lpstream = pstream)->next)));
+	if (!pstream)
+	{
+		// alloc new
+		pstream = malloc (sizeof (struct stream_cum));
+		if (pstream)
+		{
+			if (lpstream)
+				lpstream->next = pstream;
+			stream_init (pstream);
+		}
+	}
+	return pstream;
+}
+
+void
+streamlist_free (struct stream_cum *pstream)
+{
+	register struct stream_cum *lpstream;
+	while (pstream)
+	{
+		pstream = (lpstream = pstream)->next;
+		stream_end (lpstream);
+		free (lpstream);
+	}
+}
+
+void
+process_page (ogg_page *page, uint32_t serial, struct stream_cum *stream)
 {
 	// TODO
 	return;
@@ -152,19 +198,31 @@ void
 process_fd (int fd)
 {
 	char *buffer;
-	struct stream_cum stream;
+	struct stream_cum *stream = NULL;
+	struct stream_cum *cstream;
+	uint32_t serial;
+	ogg_page page;
 	ogg_sync_state state;
 	ogg_sync_init (&state);
 	int ret;
-	vorbis_comment_init (&stream.vcomm);
-	vorbis_info_init (&stream.vinfo);
 	while (true)
 	{
-		ret = ogg_sync_pageseek (&state, &stream.page);
+		ret = ogg_sync_pageseek (&state, &page);
 
 		if (ret > 0)
 		{
-			process_page (&stream, &state);
+			serial = ogg_page_serialno (&page);
+			cstream = streamlist_check (stream, serial);
+			if (cstream)
+			{
+				if (!stream)
+					stream = cstream;
+				process_page (&page, serial, cstream);
+			}
+			else
+			{
+				// TODO: update error counter
+			}
 		}
 		else
 		if (!ret)
@@ -194,8 +252,7 @@ process_fd (int fd)
 		}
 	}
 	//
-	vorbis_comment_clear (&stream.vcomm);
-	vorbis_info_clear (&stream.vinfo);
+	streamlist_free (stream);
 	ogg_sync_clear (&state);
 }
 
