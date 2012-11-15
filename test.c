@@ -157,11 +157,13 @@ stream_end (struct stream_cum *stream)
 	vorbis_info_clear (&stream->vinfo);
 }
 
-struct stream_cum *streamlist_check (struct stream_cum *pstream, uint32_t serial)
+struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page *page)
 {
 	register struct stream_cum *lpstream = NULL;
+	register uint32_t serial = ogg_page_serialno (page);
 	while (pstream && (pstream->serial != serial && (pstream = (lpstream = pstream)->next)));
-	if (!pstream)
+	// alloc new logic stream if page with BOS flag
+	if (!pstream && ogg_page_bos (page))
 	{
 		// alloc new
 		pstream = malloc (sizeof (struct stream_cum));
@@ -188,7 +190,7 @@ streamlist_free (struct stream_cum *pstream)
 }
 
 void
-process_page (ogg_page *page, uint32_t serial, struct stream_cum *stream)
+process_packets (const ogg_page *page, int packets, struct stream_cum *stream)
 {
 	// TODO
 	return;
@@ -200,24 +202,23 @@ process_fd (int fd)
 	char *buffer;
 	struct stream_cum *stream = NULL;
 	struct stream_cum *cstream;
-	uint32_t serial;
 	ogg_page page;
 	ogg_sync_state state;
 	ogg_sync_init (&state);
-	int ret;
+	register int ret;
 	while (true)
 	{
 		ret = ogg_sync_pageseek (&state, &page);
 
 		if (ret > 0)
 		{
-			serial = ogg_page_serialno (&page);
-			cstream = streamlist_check (stream, serial);
+			cstream = streamlist_check (stream, &page);
 			if (cstream)
 			{
 				if (!stream)
 					stream = cstream;
-				process_page (&page, serial, cstream);
+				if ((ret = ogg_page_packets (&page)) > 0)
+					process_packets (&page, ret, cstream);
 			}
 			else
 			{
