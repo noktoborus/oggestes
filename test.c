@@ -15,7 +15,8 @@
 
 struct stream_cum
 {
-	uint32_t serial;
+	uint32_t serial; /* stream serial code */
+	size_t packet; /* last packet number */
 	ogg_stream_state state;
 	vorbis_info vinfo;
 	vorbis_comment vcomm;
@@ -192,7 +193,19 @@ streamlist_free (struct stream_cum *pstream)
 void
 process_packets (const ogg_page *page, int packets, struct stream_cum *stream)
 {
-	// TODO
+	ogg_packet packet;
+	if (packets <= 0)
+		return;
+	// vorbis header in first thee packets (0x01, 0x03, 0x05)
+	if (stream->packet <= 3)
+	{
+		do
+		{
+			stream->packet ++;
+			vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, packet);
+		}
+		while (--packets > 0)
+	}
 	return;
 }
 
