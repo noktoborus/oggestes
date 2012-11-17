@@ -15,166 +15,98 @@
 
 struct stream_cum
 {
+	struct stream_cum *next;
 	uint32_t serial; /* stream serial code */
 	size_t packet; /* last packet number */
+	bool headerfail; /* check vinfo and vcomm here */
+	uint64_t granulepos;
 	ogg_stream_state state;
 	vorbis_info vinfo;
 	vorbis_comment vcomm;
-	struct stream_cum *next;
 };
 
-void
-print_vorbis (ogg_packet *packet, vorbis_info *vinfo, vorbis_comment *vcom)
-{
-	register size_t i;
-	switch (vorbis_synthesis_headerin (vinfo, vcom, packet))
-	{
-		case OV_ENOTVORBIS:
-			printf ("<vorbis not vorbis>\n");
-			break;
-		case OV_EBADHEADER:
-			printf ("<vorbis bad header>\n");
-			break;
-		case OV_EFAULT:
-			printf ("<vorbis internal error>\n");
-			break;
-		case 0:
-			switch (packet->packetno)
-			{
-				case 0:
-					printf ("<vorbis version=%d, channels=%d, rate=%ld, "
-							"bitrate_upper=%ld, bitrate_nominal=%ld, "
-							"bitrate_lower=%ld, bitrate_window=%ld, "
-							"codec_setup=%p>\n",
-							vinfo->version, vinfo->channels, vinfo->rate,
-							vinfo->bitrate_upper, vinfo->bitrate_nominal,
-							vinfo->bitrate_lower, vinfo->bitrate_window,
-							vinfo->codec_setup);
-					break;
-				case 1:
-					printf ("<vorbis user_comments=%p, comment_lengths=%p, comments=%d, vendor='%s'>\n",
-							(void*)vcom->user_comments, (void*)vcom->comment_lengths, vcom->comments, vcom->vendor);
-					for (i = 0; i < vcom->comments; i ++)
-					{
-						printf ("<comment '%s'>\n", vcom->user_comments[i]);
-					}
-					break;
-			}
-			break;
-	}
-}
-
-void
-print_ogpack (ogg_packet *packet, vorbis_info *vinfo, vorbis_comment *vcom)
-{
-	printf ("<ogg_packet packet=%p, bytes=%ld, b_o_s=%ld, e_o_s=%ld, granulepos=%ld, packetno=%ld, "
-			"0x%02x%02x%02x%02x>\n",
-			packet->packet, packet->bytes, packet->b_o_s, packet->e_o_s,
-			packet->granulepos, packet->packetno,
-			packet->packet[0], packet->packet[1], packet->packet[2], packet->packet[3]);
-	print_vorbis (packet, vinfo, vcom);
-}
-
-void
-print_ogp (ogg_page *ogp, bool nog, ogg_stream_state *state, vorbis_info *vinfo, vorbis_comment *vcom)
-{
-	/*
-		typedef struct {
-			unsigned char *header;
-			long           header_len;
-			unsigned char *body;
-			long           body_len;
-		} ogg_page;
-	 */
-	printf ("<ogg_page header=%p, header_len=%ld, body=%p, body_len=%ld, ",
-			(void*)ogp->header, ogp->header_len,
-			(void*)ogp->body, ogp->body_len);
-	if (ogp->body)
-	{
-		printf ("serial=0x%x, bos=%d, eos=%d, gran=%lu, cont=%d, pageno=%ld, packets=%d, "
-				"0x%02x%02x%02x%02x>\n",
-			ogg_page_serialno (ogp),
-			ogg_page_bos (ogp),
-			ogg_page_eos (ogp),
-			ogg_page_granulepos (ogp),
-			ogg_page_continued (ogp),
-			ogg_page_pageno (ogp),
-			ogg_page_packets (ogp),
-			ogp->body[0], ogp->body[1], ogp->body[2], ogp->body[3]
-			);
-		if ((ogg_page_pageno (ogp) == 0 && !ogg_stream_init (state, ogg_page_serialno (ogp))) || true)
-		{
-			if (ogg_page_pageno (ogp) < 3 && !nog)
-			{
-				ogg_packet packet;
-				//printf ("HE\n");
-				//print_ogp (ogp, true);
-				ogg_stream_pagein (state, ogp);
-				if (ogg_stream_packetout (state, &packet) == 1)
-					print_ogpack (&packet, vinfo, vcom);
-				if (ogg_stream_packetout (state, &packet) == 1)
-					print_ogpack (&packet, vinfo, vcom);
-			}
-		}
-	}
-	else
-	{
-		printf ("null>\n");
-	}
-}
-
-void
-print_ogss (ogg_sync_state *ogss)
-{
-	/*
-	typedef struct {
-		unsigned char *data;
-		int storage;
-		int fill;
-		int returned;
-
-		int unsynced;
-		int headerbytes;
-		int bodybytes;
-	} ogg_sync_state;
-	*/
-	printf ("<ogg_sync_state data=%p, storage=%d, fill=%d, returned=%d, unsynced=%d, headerbytes=%d, bodybytes=%d>\n",
-			ogss->data, ogss->storage, ogss->fill, ogss->returned,
-			ogss->unsynced, ogss->headerbytes, ogss->bodybytes);
-}
-
-void
-stream_init (struct stream_cum *stream)
+bool
+stream_init (struct stream_cum *stream, uint32_t serial)
 {
 	memset (stream, 0, sizeof (struct stream_cum));
-	vorbis_comment_init (&stream->vcomm);
-	vorbis_info_init (&stream->vinfo);
+	if (!ogg_stream_init (&stream->state, serial))
+	{
+		vorbis_comment_init (&stream->vcomm);
+		vorbis_info_init (&stream->vinfo);
+		stream->serial = serial;
+		return true;
+	}
+	return false;
 }
 
 void
 stream_end (struct stream_cum *stream)
 {
+	unsigned int i;
+	if (stream->packet >= 3 && !stream->headerfail)
+	{
+		double time;
+		printf ("<stream 0x%x, vorbis>\n", stream->serial);
+		printf ("<vorbis version=%d, channels=%d, rate=%ld, "
+				"bitrate_upper=%ld, bitrate_nominal=%ld, "
+				"bitrate_lower=%ld, bitrate_window=%ld, "
+				"codec_setup=%p>\n",
+				stream->vinfo.version, stream->vinfo.channels, stream->vinfo.rate,
+				stream->vinfo.bitrate_upper, stream->vinfo.bitrate_nominal,
+				stream->vinfo.bitrate_lower, stream->vinfo.bitrate_window,
+				stream->vinfo.codec_setup);
+		printf ("<vorbis user_comments=%p, comment_lengths=%p, comments=%d, vendor='%s'>\n",
+				(void*)stream->vcomm.user_comments, (void*)stream->vcomm.comment_lengths, stream->vcomm.comments, stream->vcomm.vendor);
+		for (i = 0; i < stream->vcomm.comments; i ++)
+		{
+			printf ("<comment '%s'>\n", stream->vcomm.user_comments[i]);
+		}
+		time = (double)stream->granulepos / stream->vinfo.rate;
+		printf ("time: %.3fseconds\n", time);
+	}
+	else
+	{
+		printf ("<stream 0x%x, unknown>\n", stream->serial);
+	}
 	vorbis_comment_clear (&stream->vcomm);
 	vorbis_info_clear (&stream->vinfo);
+	ogg_stream_clear (&stream->state);
 }
 
 struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page *page)
 {
 	register struct stream_cum *lpstream = NULL;
 	register uint32_t serial = ogg_page_serialno (page);
-	while (pstream && (pstream->serial != serial && (pstream = (lpstream = pstream)->next)));
-	// alloc new logic stream if page with BOS flag
-	if (!pstream && ogg_page_bos (page))
+	while (pstream && pstream->serial && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
+	// alloc new logic stream or realloc old, if page with BOS flag
+	if (ogg_page_bos (page))
 	{
-		// alloc new
-		pstream = malloc (sizeof (struct stream_cum));
-		if (pstream)
+		if (!pstream)
 		{
-			if (lpstream)
-				lpstream->next = pstream;
-			stream_init (pstream);
+			// alloc new
+			pstream = malloc (sizeof (struct stream_cum));
+			if (pstream)
+			{
+				if (lpstream)
+					lpstream->next = pstream;
+				if (!stream_init (pstream, serial))
+				{
+					free (pstream);
+					pstream = NULL;
+				}
+			}
+		}
+		else
+		if (pstream && !pstream->serial)
+		{
+			stream_end (pstream);
+			if (!stream_init (pstream, serial))
+				pstream = NULL;
 		}
 	}
+	else
+	if (pstream && !pstream->serial)
+		return NULL;
 	return pstream;
 }
 
@@ -191,21 +123,28 @@ streamlist_free (struct stream_cum *pstream)
 }
 
 void
-process_packets (const ogg_page *page, int packets, struct stream_cum *stream)
+process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 {
 	ogg_packet packet;
 	if (packets <= 0)
 		return;
 	// vorbis header in first thee packets (0x01, 0x03, 0x05)
-	if (stream->packet <= 3)
+	while (stream->packet < 3 && packets > 0)
 	{
-		do
+		if (ogg_stream_packetout (&stream->state, &packet) != 1)
 		{
-			stream->packet ++;
-			vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, packet);
+			// TODO: update exception counter
+			continue;
 		}
-		while (--packets > 0)
+		packets --;
+		stream->packet ++;
+		if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
+			stream->headerfail = false;
+		else
+			stream->headerfail = true;
 	}
+	if (packets > 0)
+		stream->packet += packets;
 	return;
 }
 
@@ -231,7 +170,16 @@ process_fd (int fd)
 				if (!stream)
 					stream = cstream;
 				if ((ret = ogg_page_packets (&page)) > 0)
-					process_packets (&page, ret, cstream);
+				{
+					if (!ogg_stream_pagein (&cstream->state, &page))
+					{
+						cstream->granulepos = ogg_page_granulepos (&page);
+						process_packets (&page, ret, cstream);
+					}
+					/*else
+						// TODO: update error counter
+					*/
+				}
 			}
 			else
 			{
