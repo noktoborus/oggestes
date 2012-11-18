@@ -19,6 +19,7 @@ struct stream_cum
 	uint32_t serial; /* stream serial code */
 	size_t packet; /* last packet number */
 	bool headerfail; /* check vinfo and vcomm here */
+	bool isfree; /* */
 	uint64_t granulepos;
 	ogg_stream_state state;
 	vorbis_info vinfo;
@@ -77,7 +78,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 {
 	register struct stream_cum *lpstream = NULL;
 	register uint32_t serial = ogg_page_serialno (page);
-	while (pstream && pstream->serial && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
+	while (pstream && pstream->isfree && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
 	// alloc new logic stream or realloc old, if page with BOS flag
 	if (ogg_page_bos (page))
 	{
@@ -97,7 +98,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 			}
 		}
 		else
-		if (pstream && !pstream->serial)
+		if (pstream && pstream->isfree)
 		{
 			stream_end (pstream);
 			if (!stream_init (pstream, serial))
@@ -105,8 +106,8 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 		}
 	}
 	else
-	if (pstream && !pstream->serial)
-		return NULL;
+	if (pstream && pstream->isfree)
+		pstream = NULL;
 	return pstream;
 }
 
@@ -136,12 +137,25 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			// TODO: update exception counter
 			continue;
 		}
+		// update packets counters
 		packets --;
 		stream->packet ++;
+		// check first vorbis
+		if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
+		{
+			printf ("NOT VORBIS 0x%x\n", stream->serial);
+			stream->headerfail = true;
+			stream->isfree = true;
+			break;
+		}
 		if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
 			stream->headerfail = false;
 		else
+		{
 			stream->headerfail = true;
+			stream->isfree = true;
+			break;
+		}
 	}
 	if (packets > 0)
 		stream->packet += packets;
