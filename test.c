@@ -143,7 +143,6 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 		// check first vorbis
 		if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
 		{
-			printf ("NOT VORBIS 0x%x\n", stream->serial);
 			stream->headerfail = true;
 			stream->isfree = true;
 			break;
