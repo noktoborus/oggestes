@@ -63,7 +63,7 @@ stream_end (struct stream_cum *stream)
 			printf ("<comment '%s'>\n", stream->vcomm.user_comments[i]);
 		}
 		time = (double)stream->granulepos / stream->vinfo.rate;
-		printf ("time: %.3fseconds\n", time);
+		printf ("<time: %.3fseconds>\n", time);
 	}
 	else
 	{
