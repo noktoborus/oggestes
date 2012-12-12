@@ -12,14 +12,17 @@
 #include <vorbis/codec.h>
 
 #define OGG_BFSZ 2048
+#define CUM_FLAG_WITHEOS 1
+#define CUM_FLAG_NOHOLES 2
+#define CUM_FLAG_NOHEAD  4
+#define CUM_FLAG_ISFREE  8
 
 struct stream_cum
 {
 	struct stream_cum *next;
 	uint32_t serial; /* stream serial code */
 	size_t packet; /* last packet number */
-	bool headerfail; /* check vinfo and vcomm here */
-	bool isfree; /* */
+	uint8_t flags;
 	uint64_t granulepos;
 	ogg_stream_state state;
 	vorbis_info vinfo;
@@ -44,7 +47,7 @@ void
 stream_end (struct stream_cum *stream)
 {
 	unsigned int i;
-	if (stream->packet >= 3 && !stream->headerfail)
+	if (stream->packet >= 3 && !(stream->flags & CUM_FLAG_NOHEAD))
 	{
 		double time;
 		printf ("<stream 0x%x, vorbis>\n", stream->serial);
@@ -78,7 +81,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 {
 	register struct stream_cum *lpstream = NULL;
 	register uint32_t serial = ogg_page_serialno (page);
-	while (pstream && !pstream->isfree && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
+	while (pstream && !(pstream->flags & CUM_FLAG_ISFREE) && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
 	// alloc new logic stream or realloc old, if page with BOS flag
 	if (ogg_page_bos (page))
 	{
@@ -98,7 +101,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 			}
 		}
 		else
-		if (pstream && pstream->isfree)
+		if (pstream && pstream->flags & CUM_FLAG_ISFREE)
 		{
 			stream_end (pstream);
 			if (!stream_init (pstream, serial))
@@ -106,10 +109,10 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 		}
 	}
 	else
-	if (pstream && (pstream->isfree || ogg_page_eos (page)))
+	if (pstream && (pstream->flags & CUM_FLAG_ISFREE || ogg_page_eos (page)))
 	{
-		if (!pstream->isfree)
-			pstream->isfree = true;
+		if (!(pstream->flags & CUM_FLAG_ISFREE))
+			pstream->flags |= CUM_FLAG_ISFREE;
 		pstream = NULL;
 	}
 	return pstream;
@@ -147,16 +150,14 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 		// check first vorbis
 		if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
 		{
-			stream->headerfail = true;
-			stream->isfree = true;
+			stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
 			break;
 		}
 		if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
-			stream->headerfail = false;
+			stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
 		else
 		{
-			stream->headerfail = true;
-			stream->isfree = true;
+			stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
 			break;
 		}
 	}
