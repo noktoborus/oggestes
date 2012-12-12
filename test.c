@@ -78,7 +78,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 {
 	register struct stream_cum *lpstream = NULL;
 	register uint32_t serial = ogg_page_serialno (page);
-	while (pstream && pstream->isfree && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
+	while (pstream && !pstream->isfree && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
 	// alloc new logic stream or realloc old, if page with BOS flag
 	if (ogg_page_bos (page))
 	{
