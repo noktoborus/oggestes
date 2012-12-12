@@ -106,8 +106,12 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 		}
 	}
 	else
-	if (pstream && pstream->isfree)
+	if (pstream && (pstream->isfree || ogg_page_eos (page)))
+	{
+		if (!pstream->isfree)
+			pstream->isfree = true;
 		pstream = NULL;
+	}
 	return pstream;
 }
 
