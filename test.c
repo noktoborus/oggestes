@@ -12,12 +12,12 @@
 #include <vorbis/codec.h>
 
 #define OGG_BFSZ 2048
-#define CUM_FLAG_WITHEOS 1
-#define CUM_FLAG_HHOLE   2
-#define CUM_FLAG_NOHEAD  4
-#define CUM_FLAG_ISFREE  8
-#define CUM_FLAG_INTEX   64  /* internal error, unrecoverable exception */
-#define CUM_FLAG_WARNED  128 /* non-critical warning */
+#define CUM_FLAG_WITHEOS 0x01
+#define CUM_FLAG_HHOLE   0x02
+#define CUM_FLAG_NOHEAD  0x04
+#define CUM_FLAG_ISFREE  0x08
+#define CUM_FLAG_OGGEXC  0x40 /* libogg internal error, unrecoverable */
+#define CUM_FLAG_WARNED  0x80 /* non-critical warning */
 
 struct stream_cum
 {
@@ -83,7 +83,7 @@ stream_end (struct stream_cum *stream)
 		printf (" noheader");
 	if (stream->flags & CUM_FLAG_HHOLE)
 		printf (" holes");
-	if (stream->flags & CUM_FLAG_INTEX)
+	if (stream->flags & CUM_FLAG_OGGEXC)
 		printf (" unrecoverable");
 	if (stream->flags & CUM_FLAG_WARNED)
 		printf (" warning");
@@ -97,23 +97,29 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 {
 	register struct stream_cum *lpstream = NULL;
 	register uint32_t serial = ogg_page_serialno (page);
-	while (pstream && !(pstream->flags & CUM_FLAG_ISFREE) && pstream->serial != serial && (pstream = (lpstream = pstream)->next));
+	// first check for serial
+	for (lpstream = pstream; lpstream && lpstream->serial != serial; lpstream = lpstream->next);
 	// alloc new logic stream or realloc old, if page with BOS flag
 	if (ogg_page_bos (page))
 	{
-		if (!pstream)
+		// next check for free node
+		for (lpstream = pstream; lpstream && !(lpstream->flags & CUM_FLAG_ISFREE); lpstream = lpstream->next);
+		if (!lpstream)
 		{
 			// alloc new
-			pstream = malloc (sizeof (struct stream_cum));
-			if (pstream)
+			lpstream = malloc (sizeof (struct stream_cum));
+			if (lpstream)
 			{
 				if (lpstream)
-					lpstream->next = pstream;
-				if (!stream_init (pstream, serial))
+					lpstream->next = pstream ? pstream->next : NULL;
+				if (!stream_init (lpstream, serial))
 				{
-					free (pstream);
-					pstream = NULL;
+					free (lpstream);
+					lpstream = NULL;
 				}
+				else
+				if (pstream)
+					pstream->next = lpstream;
 			}
 		}
 		else
@@ -127,11 +133,11 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 	else
 	if (pstream && (pstream->flags & CUM_FLAG_ISFREE || ogg_page_eos (page)))
 	{
-		if (!(pstream->flags & CUM_FLAG_ISFREE))
-			pstream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_WITHEOS);
+		if (!(lpstream->flags & CUM_FLAG_ISFREE))
+			lpstream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_WITHEOS);
 		pstream = NULL;
 	}
-	return pstream;
+	return lpstream;
 }
 
 void
@@ -156,14 +162,14 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 	if (packets <= 0)
 		return;
 	// vorbis header in first thee packets (0x01, 0x03, 0x05)
-	while (packets > 0 && !(stream->flags & (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE)))
+	while (packets > 0 && !(stream->flags & (CUM_FLAG_ISFREE)))
 	{
 		if ((ret = ogg_stream_packetout (&stream->state, &packet)) != 1)
 		{
 			if (ret == 0)
 			{
 				// set unrecoverable exception
-				stream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_INTEX);
+				stream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_OGGEXC);
 				break;
 			}
 			else
@@ -194,14 +200,14 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			// check first vorbis
 			if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
 			{
-				stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
+				stream->flags |= CUM_FLAG_NOHEAD;
 				break;
 			}
 			if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
 				stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
 			else
 			{
-				stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
+				stream->flags |= CUM_FLAG_NOHEAD;
 				break;
 			}
 		}
