@@ -236,17 +236,17 @@ process_fd (int fd)
 			{
 				if (!stream)
 					stream = cstream;
-				if ((ret = ogg_page_packets (&page)) > 0)
+				if (!ogg_stream_pagein (&cstream->state, &page))
 				{
-					if (!ogg_stream_pagein (&cstream->state, &page))
+					if ((ret = ogg_page_packets (&page)) > 0)
 					{
 						cstream->granulepos = ogg_page_granulepos (&page);
 						process_packets (&page, ret, cstream);
 					}
-					/*else
-						// TODO: update error counter
-					*/
 				}
+				/*else
+					// TODO: update error counter
+				*/
 			}
 			else
 			{
