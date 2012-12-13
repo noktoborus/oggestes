@@ -13,9 +13,11 @@
 
 #define OGG_BFSZ 2048
 #define CUM_FLAG_WITHEOS 1
-#define CUM_FLAG_NOHOLES 2
+#define CUM_FLAG_HHOLE   2
 #define CUM_FLAG_NOHEAD  4
 #define CUM_FLAG_ISFREE  8
+#define CUM_FLAG_INTEX   64  /* internal error, unrecoverable exception */
+#define CUM_FLAG_WARNED  128 /* non-critical warning */
 
 struct stream_cum
 {
@@ -72,6 +74,20 @@ stream_end (struct stream_cum *stream)
 	{
 		printf ("<stream 0x%x, unknown>\n", stream->serial);
 	}
+	printf ("<have:");
+	if (stream->flags & CUM_FLAG_WITHEOS)
+		printf (" eos");
+	else
+		printf (" noeos");
+	if (stream->flags & CUM_FLAG_NOHEAD)
+		printf (" noheader");
+	if (stream->flags & CUM_FLAG_HHOLE)
+		printf (" holes");
+	if (stream->flags & CUM_FLAG_INTEX)
+		printf (" unrecoverable");
+	if (stream->flags & CUM_FLAG_WARNED)
+		printf (" warning");
+	printf (">\n");
 	vorbis_comment_clear (&stream->vcomm);
 	vorbis_info_clear (&stream->vinfo);
 	ogg_stream_clear (&stream->state);
@@ -112,7 +128,7 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 	if (pstream && (pstream->flags & CUM_FLAG_ISFREE || ogg_page_eos (page)))
 	{
 		if (!(pstream->flags & CUM_FLAG_ISFREE))
-			pstream->flags |= CUM_FLAG_ISFREE;
+			pstream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_WITHEOS);
 		pstream = NULL;
 	}
 	return pstream;
@@ -133,36 +149,63 @@ streamlist_free (struct stream_cum *pstream)
 void
 process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 {
+	// calc errors (prevent infinite loops)
+	register int errorc = packets;
+	register int ret;
 	ogg_packet packet;
 	if (packets <= 0)
 		return;
 	// vorbis header in first thee packets (0x01, 0x03, 0x05)
-	while (stream->packet < 3 && packets > 0)
+	while (packets > 0 && !(stream->flags & (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE)))
 	{
-		if (ogg_stream_packetout (&stream->state, &packet) != 1)
+		if ((ret = ogg_stream_packetout (&stream->state, &packet)) != 1)
 		{
-			// TODO: update exception counter
-			continue;
+			if (ret == 0)
+			{
+				// set unrecoverable exception
+				stream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_INTEX);
+				break;
+			}
+			else
+			{
+				stream->flags |= CUM_FLAG_WARNED;
+				if (errorc-- > 0)
+					continue;
+				else
+				{
+					// mark hole in stream
+					stream->flags |= CUM_FLAG_HHOLE;
+					break;
+				}
+			}
 		}
+		// reset errors counter
+		errorc = packets;
+		// check for hole in stream
+		if (!(stream->flags & CUM_FLAG_HHOLE))
+			if (stream->packet != packet.packetno)
+				stream->flags |= CUM_FLAG_HHOLE;
 		// update packets counters
-		packets --;
 		stream->packet ++;
-		// check first vorbis
-		if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
+		packets --;
+		// first 3 packets must be contain vorbis header
+		if (stream->packet < 3)
 		{
-			stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
-			break;
-		}
-		if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
-			stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
-		else
-		{
-			stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
-			break;
+			// check first vorbis
+			if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
+			{
+				stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
+				break;
+			}
+			if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
+				stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
+			else
+			{
+				stream->flags |= (CUM_FLAG_NOHEAD | CUM_FLAG_ISFREE);
+				break;
+			}
 		}
 	}
-	if (packets > 0)
-		stream->packet += packets;
 	return;
 }
 
