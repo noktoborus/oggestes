@@ -29,6 +29,12 @@ struct stream_cum
 	ogg_stream_state state;
 	vorbis_info vinfo;
 	vorbis_comment vcomm;
+	struct {
+		int fd;
+		ogg_stream_state state;
+		vorbis_dsp_state vdsp;
+		vorbis_block vblk;
+	} output;
 };
 
 bool
