@@ -94,7 +94,7 @@ stream_end (struct stream_cum *stream)
 	if (stream->flags & CUM_FLAG_WARNED)
 		printf (" warning");
 	printf (">\n");
-	/* finialize copy */
+	/* finalize copy */
 	if (stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_WARNED) == stream->flags)
 	{
 		/* TODO: stream ok, save */
