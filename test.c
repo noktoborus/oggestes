@@ -94,6 +94,15 @@ stream_end (struct stream_cum *stream)
 	if (stream->flags & CUM_FLAG_WARNED)
 		printf (" warning");
 	printf (">\n");
+	/* finialize copy */
+	if (stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_WARNED) == stream->flags)
+	{
+		/* TODO: stream ok, save */
+	}
+	else
+	{
+		/* TODO: stream failed, remove */
+	}
 	vorbis_comment_clear (&stream->vcomm);
 	vorbis_info_clear (&stream->vinfo);
 	ogg_stream_clear (&stream->state);
@@ -210,12 +219,22 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 				break;
 			}
 			if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
+			{
 				stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
+			}
 			else
 			{
 				stream->flags |= CUM_FLAG_NOHEAD;
 				break;
 			}
+		}
+		if (stream->packet == 3)
+		{
+			// TODO: vorbis header OK, init dsp, force write
+		}
+		else
+		{
+			// TODO: normal copy
 		}
 	}
 	return;
