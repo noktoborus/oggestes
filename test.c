@@ -14,10 +14,12 @@
 #define OGG_BFSZ 2048
 #define CUM_FLAG_WITHEOS 0x01
 #define CUM_FLAG_HHOLE   0x02
-#define CUM_FLAG_NOHEAD  0x04
+#define CUM_FLAG_HHEAD   0x04
 #define CUM_FLAG_ISFREE  0x08
 #define CUM_FLAG_OGGEXC  0x40 /* libogg internal error, unrecoverable */
 #define CUM_FLAG_WARNED  0x80 /* non-critical warning */
+
+#define COUT_FLAG_INITED 0x01
 
 struct stream_cum
 {
@@ -31,11 +33,27 @@ struct stream_cum
 	vorbis_comment vcomm;
 	struct {
 		int fd;
+		uint8_t flags;
 		ogg_stream_state state;
 		vorbis_dsp_state vdsp;
 		vorbis_block vblk;
-	} output;
+	} o;
 };
+
+void
+streamout_init (struct stream_cum *stream)
+{
+	char *title = NULL;
+	if (!(stream->o.flags & COUT_FLAG_INITED) || !(stream->flags & CUM_FLAG_HHEAD))
+		return;
+	// find title
+	if ((title = vorbis_comment_query (&stream->vcomm, "TITLE", 0)))
+	{
+		vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
+		vorbis_block_init (&stream->o.vdsp, &stream->o.vblk);
+		stream->o.flags |= COUT_FLAG_INITED;
+	}
+}
 
 bool
 stream_init (struct stream_cum *stream, uint32_t serial)
@@ -55,7 +73,7 @@ void
 stream_end (struct stream_cum *stream)
 {
 	unsigned int i;
-	if (stream->packet >= 3 && !(stream->flags & CUM_FLAG_NOHEAD))
+	if (stream->packet >= 3 && (stream->flags & CUM_FLAG_HHEAD))
 	{
 		double time;
 		printf ("<stream 0x%x, vorbis>\n", stream->serial);
@@ -85,7 +103,9 @@ stream_end (struct stream_cum *stream)
 		printf (" eos");
 	else
 		printf (" noeos");
-	if (stream->flags & CUM_FLAG_NOHEAD)
+	if (stream->flags & CUM_FLAG_HHEAD)
+		printf (" header");
+	else
 		printf (" noheader");
 	if (stream->flags & CUM_FLAG_HHOLE)
 		printf (" holes");
@@ -95,7 +115,7 @@ stream_end (struct stream_cum *stream)
 		printf (" warning");
 	printf (">\n");
 	/* finalize copy */
-	if (stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_WARNED) == stream->flags)
+	if ((stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_WARNED)) == stream->flags)
 	{
 		/* TODO: stream ok, save */
 	}
@@ -215,22 +235,23 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			// check first vorbis
 			if (stream->packet == 1 && !vorbis_synthesis_idheader (&packet))
 			{
-				stream->flags |= CUM_FLAG_NOHEAD;
+				stream->flags &= ~CUM_FLAG_HHEAD; /* nope? */
 				break;
 			}
 			if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
 			{
-				stream->flags &= ~CUM_FLAG_NOHEAD; /* nope? */
+				stream->flags |= CUM_FLAG_HHEAD;
 			}
 			else
 			{
-				stream->flags |= CUM_FLAG_NOHEAD;
+				stream->flags &= ~CUM_FLAG_HHEAD;
 				break;
 			}
 		}
 		if (stream->packet == 3)
 		{
 			// TODO: vorbis header OK, init dsp, force write
+			streamout_init (stream);
 		}
 		else
 		{
