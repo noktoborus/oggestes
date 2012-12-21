@@ -290,20 +290,29 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 					if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
 								&packet, &packet_comm, &packet_code) == 0)
 					{
-						if (!ogg_stream_packetin (&stream->o.state, &packet))
+						/* write vorbis info */
+						/* if ogg_stream_packetin failed, then ogg_stream_flush return zero immediately */
+						ogg_stream_packetin (&stream->o.state, &packet);
+						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
 						{
-							while (ogg_stream_flush (&stream->o.state, &stream->o.page))
+							if (!streamout_write (stream))
 							{
-								if (!streamout_write (stream))
-								{
-									/* write failed */
-									stream->o.flags |= COUT_FLAG_BREAK;
-									break;
-								}
+								/* write failed */
+								stream->o.flags |= COUT_FLAG_BREAK;
+								break;
 							}
 						}
-						else
-							stream->o.flags |= COUT_FLAG_BREAK;
+						/* write vorbis comment and configuration block */
+						ogg_stream_packetin (&stream->o.state, &packet_comm);
+						ogg_stream_packetin (&stream->o.state, &packet_code);
+						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
+						{
+							if (!streamout_write (stream))
+							{
+								stream->o.flags |= COUT_FLAG_BREAK;
+								break;
+							}
+						}
 					}
 					else
 					{
