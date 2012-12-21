@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <ogg/ogg.h>
 #include <vorbis/codec.h>
@@ -20,6 +21,7 @@
 #define CUM_FLAG_WARNED  0x80 /* non-critical warning */
 
 #define COUT_FLAG_INITED 0x01
+#define COUT_FLAG_BREAK  0x40 /* write fail */
 
 struct stream_cum
 {
@@ -34,25 +36,51 @@ struct stream_cum
 	struct {
 		int fd;
 		uint8_t flags;
+		size_t size;
 		ogg_stream_state state;
+		ogg_page page;
 		vorbis_dsp_state vdsp;
 		vorbis_block vblk;
 	} o;
 };
 
-void
+bool
+streamout_write (struct stream_cum *stream)
+{
+	register ssize_t ret;
+	ret = write (stream->o.fd, (void*)&stream->o.page.header, stream->o.page.header_len);
+	if (ret != -1)
+		stream->o.size += ret;
+	if (ret == -1 || ret < stream->o.page.header_len)
+		return false;
+	ret = write (stream->o.fd, (void*)&stream->o.page.body, stream->o.page.body_len);
+	if (ret != -1)
+		stream->o.size += ret;
+	if (ret == -1 || ret < stream->o.page.body_len)
+		return false;
+	return true;
+}
+
+bool
 streamout_init (struct stream_cum *stream)
 {
 	char *title = NULL;
-	if (!(stream->o.flags & COUT_FLAG_INITED) || !(stream->flags & CUM_FLAG_HHEAD))
-		return;
+	if ((stream->o.flags & COUT_FLAG_INITED) || !(stream->flags & CUM_FLAG_HHEAD))
+		return false;
 	// find title
 	if ((title = vorbis_comment_query (&stream->vcomm, "TITLE", 0)))
 	{
-		vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
-		vorbis_block_init (&stream->o.vdsp, &stream->o.vblk);
-		stream->o.flags |= COUT_FLAG_INITED;
+		stream->o.fd = open (title, O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+		if (stream->o.fd != -1)
+		{
+			ogg_stream_init (&stream->state, stream->serial);
+			vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
+			vorbis_block_init (&stream->o.vdsp, &stream->o.vblk);
+			stream->o.flags |= COUT_FLAG_INITED;
+			return true;
+		}
 	}
+	return false;
 }
 
 bool
@@ -251,7 +279,36 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 		if (stream->packet == 3)
 		{
 			// TODO: vorbis header OK, init dsp, force write
-			streamout_init (stream);
+			if (streamout_init (stream))
+			{
+				ogg_packet packet_comm;
+				ogg_packet packet_code;
+				// flush headers
+				if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
+							&packet, &packet_comm, &packet_code) == 0)
+				{
+					if (!ogg_stream_packetin (&stream->o.state, &packet))
+					{
+						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
+						{
+							if (!streamout_write (stream))
+							{
+								/* write failed */
+								stream->o.flags |= COUT_FLAG_BREAK;
+								break;
+							}
+						}
+					}
+					else
+						stream->o.flags |= COUT_FLAG_BREAK;
+				}
+				else
+				{
+					// set error
+					stream->o.flags |= COUT_FLAG_BREAK;
+				}
+
+			}
 		}
 		else
 		{
