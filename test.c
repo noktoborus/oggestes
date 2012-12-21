@@ -48,12 +48,12 @@ bool
 streamout_write (struct stream_cum *stream)
 {
 	register ssize_t ret;
-	ret = write (stream->o.fd, (void*)&stream->o.page.header, stream->o.page.header_len);
+	ret = write (stream->o.fd, (void*)stream->o.page.header, stream->o.page.header_len);
 	if (ret != -1)
 		stream->o.size += ret;
 	if (ret == -1 || ret < stream->o.page.header_len)
 		return false;
-	ret = write (stream->o.fd, (void*)&stream->o.page.body, stream->o.page.body_len);
+	ret = write (stream->o.fd, (void*)stream->o.page.body, stream->o.page.body_len);
 	if (ret != -1)
 		stream->o.size += ret;
 	if (ret == -1 || ret < stream->o.page.body_len)
@@ -70,7 +70,7 @@ streamout_init (struct stream_cum *stream)
 	// find title
 	if ((title = vorbis_comment_query (&stream->vcomm, "TITLE", 0)))
 	{
-		stream->o.fd = open (title, O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+		stream->o.fd = open (title, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
 		if (stream->o.fd != -1)
 		{
 			ogg_stream_init (&stream->o.state, stream->serial);
