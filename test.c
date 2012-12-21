@@ -73,7 +73,7 @@ streamout_init (struct stream_cum *stream)
 		stream->o.fd = open (title, O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 		if (stream->o.fd != -1)
 		{
-			ogg_stream_init (&stream->state, stream->serial);
+			ogg_stream_init (&stream->o.state, stream->serial);
 			vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
 			vorbis_block_init (&stream->o.vdsp, &stream->o.vblk);
 			stream->o.flags |= COUT_FLAG_INITED;
@@ -269,6 +269,7 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			if (!vorbis_synthesis_headerin (&stream->vinfo, &stream->vcomm, &packet))
 			{
 				stream->flags |= CUM_FLAG_HHEAD;
+
 			}
 			else
 			{
@@ -276,43 +277,46 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 				break;
 			}
 		}
-		if (stream->packet == 3)
+		if (!(stream->o.flags & COUT_FLAG_BREAK))
 		{
-			// TODO: vorbis header OK, init dsp, force write
-			if (streamout_init (stream))
+			if (stream->packet == 3)
 			{
-				ogg_packet packet_comm;
-				ogg_packet packet_code;
-				// flush headers
-				if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
-							&packet, &packet_comm, &packet_code) == 0)
+				// TODO: vorbis header OK, init dsp, force write
+				if (streamout_init (stream))
 				{
-					if (!ogg_stream_packetin (&stream->o.state, &packet))
+					ogg_packet packet_comm;
+					ogg_packet packet_code;
+					// flush headers
+					if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
+								&packet, &packet_comm, &packet_code) == 0)
 					{
-						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
+						if (!ogg_stream_packetin (&stream->o.state, &packet))
 						{
-							if (!streamout_write (stream))
+							while (ogg_stream_flush (&stream->o.state, &stream->o.page))
 							{
-								/* write failed */
-								stream->o.flags |= COUT_FLAG_BREAK;
-								break;
+								if (!streamout_write (stream))
+								{
+									/* write failed */
+									stream->o.flags |= COUT_FLAG_BREAK;
+									break;
+								}
 							}
 						}
+						else
+							stream->o.flags |= COUT_FLAG_BREAK;
 					}
 					else
+					{
+						// set error
 						stream->o.flags |= COUT_FLAG_BREAK;
-				}
-				else
-				{
-					// set error
-					stream->o.flags |= COUT_FLAG_BREAK;
-				}
+					}
 
+				}
 			}
-		}
-		else
-		{
-			// TODO: normal copy
+			else
+			{
+				// TODO: normal copy
+			}
 		}
 	}
 	return;
