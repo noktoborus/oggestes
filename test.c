@@ -38,25 +38,23 @@ struct stream_cum
 		uint8_t flags;
 		size_t size;
 		ogg_stream_state state;
-		ogg_page page;
 		vorbis_dsp_state vdsp;
-		vorbis_block vblk;
 	} o;
 };
 
 bool
-streamout_write (struct stream_cum *stream)
+streamout_write (struct stream_cum *stream, ogg_page *page)
 {
 	register ssize_t ret;
-	ret = write (stream->o.fd, (void*)stream->o.page.header, stream->o.page.header_len);
+	ret = write (stream->o.fd, (void*)page->header, page->header_len);
 	if (ret != -1)
 		stream->o.size += ret;
-	if (ret == -1 || ret < stream->o.page.header_len)
+	if (ret == -1 || ret < page->header_len)
 		return false;
-	ret = write (stream->o.fd, (void*)stream->o.page.body, stream->o.page.body_len);
+	ret = write (stream->o.fd, (void*)page->body, page->body_len);
 	if (ret != -1)
 		stream->o.size += ret;
-	if (ret == -1 || ret < stream->o.page.body_len)
+	if (ret == -1 || ret < page->body_len)
 		return false;
 	return true;
 }
@@ -75,12 +73,33 @@ streamout_init (struct stream_cum *stream)
 		{
 			ogg_stream_init (&stream->o.state, stream->serial);
 			vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
-			vorbis_block_init (&stream->o.vdsp, &stream->o.vblk);
 			stream->o.flags |= COUT_FLAG_INITED;
 			return true;
 		}
 	}
 	return false;
+}
+
+void
+streamout_end (struct stream_cum *stream)
+{
+	if (!(stream->o.flags & COUT_FLAG_INITED))
+		return;
+	/* finalize copy */
+	if ((stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED | CUM_FLAG_ISFREE)) == stream->flags)
+	{
+		/* finalize write */
+	}
+	else
+	{
+		/* stream failed, remove file */
+		printf ("WRITE FAILED, remove\n");
+		printf ("%d, %d\n", stream->o.flags & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED), stream->flags);
+		printf ("%d, %d\n", stream->o.flags & COUT_FLAG_INITED, stream->o.flags);
+	}
+	/* free structs */
+	vorbis_dsp_clear (&stream->o.vdsp);
+	ogg_stream_clear (&stream->o.state);
 }
 
 bool
@@ -142,18 +161,10 @@ stream_end (struct stream_cum *stream)
 	if (stream->flags & CUM_FLAG_WARNED)
 		printf (" warning");
 	printf (">\n");
-	/* finalize copy */
-	if ((stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_WARNED)) == stream->flags)
-	{
-		/* TODO: stream ok, save */
-	}
-	else
-	{
-		/* TODO: stream failed, remove */
-	}
 	vorbis_comment_clear (&stream->vcomm);
 	vorbis_info_clear (&stream->vinfo);
 	ogg_stream_clear (&stream->state);
+	streamout_end (stream);
 }
 
 struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page *page)
@@ -190,15 +201,18 @@ struct stream_cum *streamlist_check (struct stream_cum *pstream, const ogg_page 
 		{
 			stream_end (pstream);
 			if (!stream_init (pstream, serial))
-				pstream = NULL;
+				lpstream = NULL;
 		}
 	}
 	else
 	if (pstream && (pstream->flags & CUM_FLAG_ISFREE || ogg_page_eos (page)))
 	{
+		/* return stream if EOS defined in this page */
 		if (!(lpstream->flags & CUM_FLAG_ISFREE))
 			lpstream->flags |= (CUM_FLAG_ISFREE | CUM_FLAG_WITHEOS);
-		pstream = NULL;
+		else
+			/* really this may indicate hole in stream */
+			lpstream = NULL;
 	}
 	return lpstream;
 }
@@ -225,7 +239,7 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 	if (packets <= 0)
 		return;
 	// vorbis header in first thee packets (0x01, 0x03, 0x05)
-	while (packets > 0 && !(stream->flags & (CUM_FLAG_ISFREE)))
+	while (packets > 0)
 	{
 		if ((ret = ogg_stream_packetout (&stream->state, &packet)) != 1)
 		{
@@ -279,6 +293,7 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 		}
 		if (!(stream->o.flags & COUT_FLAG_BREAK))
 		{
+			ogg_page opage;
 			if (stream->packet == 3)
 			{
 				// TODO: vorbis header OK, init dsp, force write
@@ -297,9 +312,9 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 						ogg_stream_packetin (&stream->o.state, &packet_info);
 						ogg_stream_packetin (&stream->o.state, &packet_comm);
 						ogg_stream_packetin (&stream->o.state, &packet);
-						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
+						while (ogg_stream_flush (&stream->o.state, &opage))
 						{
-							if (!streamout_write (stream))
+							if (!streamout_write (stream, &opage))
 							{
 								stream->o.flags |= COUT_FLAG_BREAK;
 								break;
@@ -318,9 +333,9 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			{
 				// normal copy
 				ogg_stream_packetin (&stream->o.state, &packet);
-				while (ogg_stream_pageout (&stream->o.state, &stream->o.page))
+				while (ogg_stream_pageout (&stream->o.state, &opage))
 				{
-					if (!streamout_write (stream))
+					if (!streamout_write (stream, &opage))
 					{
 						stream->o.flags |= COUT_FLAG_BREAK;
 						break;
