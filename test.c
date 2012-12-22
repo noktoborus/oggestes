@@ -284,27 +284,19 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 				// TODO: vorbis header OK, init dsp, force write
 				if (streamout_init (stream))
 				{
+					ogg_packet packet_info;
 					ogg_packet packet_comm;
+					/* unusable really, third packet content actualy setup data */
 					ogg_packet packet_code;
 					// flush headers
 					if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
-								&packet, &packet_comm, &packet_code) == 0)
+								&packet_info, &packet_comm, &packet_code) == 0)
 					{
 						/* write vorbis info */
 						/* if ogg_stream_packetin failed, then ogg_stream_flush return zero immediately */
-						ogg_stream_packetin (&stream->o.state, &packet);
-						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
-						{
-							if (!streamout_write (stream))
-							{
-								/* write failed */
-								stream->o.flags |= COUT_FLAG_BREAK;
-								break;
-							}
-						}
-						/* write vorbis comment and configuration block */
+						ogg_stream_packetin (&stream->o.state, &packet_info);
 						ogg_stream_packetin (&stream->o.state, &packet_comm);
-						ogg_stream_packetin (&stream->o.state, &packet_code);
+						ogg_stream_packetin (&stream->o.state, &packet);
 						while (ogg_stream_flush (&stream->o.state, &stream->o.page))
 						{
 							if (!streamout_write (stream))
@@ -324,7 +316,16 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 			}
 			else
 			{
-				// TODO: normal copy
+				// normal copy
+				ogg_stream_packetin (&stream->o.state, &packet);
+				while (ogg_stream_pageout (&stream->o.state, &stream->o.page))
+				{
+					if (!streamout_write (stream))
+					{
+						stream->o.flags |= COUT_FLAG_BREAK;
+						break;
+					}
+				}
 			}
 		}
 	}
