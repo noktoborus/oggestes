@@ -82,6 +82,7 @@ streamout_end (struct stream_cum *stream)
 	if (!(stream->o.flags & COUT_FLAG_INITED))
 		return;
 	/* finalize copy */
+	close (stream->o.fd);
 	if ((stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED | CUM_FLAG_ISFREE)) == stream->flags)
 	{
 		/* finalize write */
@@ -89,13 +90,12 @@ streamout_end (struct stream_cum *stream)
 	else
 	{
 		/* stream failed, remove file */
-		printf ("WRITE FAILED, remove\n");
-		printf ("%d, %d\n", stream->o.flags & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED), stream->flags);
-		printf ("%d, %d\n", stream->o.flags & COUT_FLAG_INITED, stream->o.flags);
+		char fname[14]; // (sizeof (uint32_t) << 1) + strelen (".ogg") + 1
+		snprintf (fname, 14, "%x.ogg", stream->serial);
+		unlink (fname);
 	}
 	/* free structs */
 	ogg_stream_clear (&stream->o.state);
-	close (stream->o.fd);
 }
 
 bool
