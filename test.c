@@ -83,7 +83,8 @@ streamout_end (struct stream_cum *stream)
 		return;
 	/* finalize copy */
 	close (stream->o.fd);
-	if ((stream->flags & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED | CUM_FLAG_ISFREE)) == stream->flags)
+	// CUM_FLAG_WITHEOS and CUM_FLAG_HHEAD is required
+	if (((stream->flags | CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD) & (CUM_FLAG_WITHEOS | CUM_FLAG_HHEAD | CUM_FLAG_WARNED | CUM_FLAG_ISFREE)) == stream->flags)
 	{
 		/* finalize write */
 	}
