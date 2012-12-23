@@ -38,7 +38,6 @@ struct stream_cum
 		uint8_t flags;
 		size_t size;
 		ogg_stream_state state;
-		vorbis_dsp_state vdsp;
 	} o;
 };
 
@@ -62,20 +61,17 @@ streamout_write (struct stream_cum *stream, ogg_page *page)
 bool
 streamout_init (struct stream_cum *stream)
 {
-	char *title = NULL;
+	char fname[14]; // (sizeof (uint32_t) << 1) + strlen (".ogg") + 1
 	if ((stream->o.flags & COUT_FLAG_INITED) || !(stream->flags & CUM_FLAG_HHEAD))
 		return false;
-	// find title
-	if ((title = vorbis_comment_query (&stream->vcomm, "TITLE", 0)))
+	snprintf (fname, 14, "%x.ogg", stream->serial);
+	/* use serial as file name */
+	stream->o.fd = open (fname, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
+	if (stream->o.fd != -1)
 	{
-		stream->o.fd = open (title, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
-		if (stream->o.fd != -1)
-		{
-			ogg_stream_init (&stream->o.state, stream->serial);
-			vorbis_analysis_init (&stream->o.vdsp, &stream->vinfo);
-			stream->o.flags |= COUT_FLAG_INITED;
-			return true;
-		}
+		ogg_stream_init (&stream->o.state, stream->serial);
+		stream->o.flags |= COUT_FLAG_INITED;
+		return true;
 	}
 	return false;
 }
@@ -98,8 +94,8 @@ streamout_end (struct stream_cum *stream)
 		printf ("%d, %d\n", stream->o.flags & COUT_FLAG_INITED, stream->o.flags);
 	}
 	/* free structs */
-	vorbis_dsp_clear (&stream->o.vdsp);
 	ogg_stream_clear (&stream->o.state);
+	close (stream->o.fd);
 }
 
 bool
@@ -294,42 +290,37 @@ process_packets (ogg_page *page, int packets, struct stream_cum *stream)
 		if (!(stream->o.flags & COUT_FLAG_BREAK))
 		{
 			ogg_page opage;
-			if (stream->packet == 3)
+			if (stream->packet == 1)
 			{
-				// TODO: vorbis header OK, init dsp, force write
-				if (streamout_init (stream))
-				{
-					ogg_packet packet_info;
-					ogg_packet packet_comm;
-					/* unusable really, third packet content actualy setup data */
-					ogg_packet packet_code;
-					// flush headers
-					if (vorbis_analysis_headerout (&stream->o.vdsp, &stream->vcomm,
-								&packet_info, &packet_comm, &packet_code) == 0)
-					{
-						/* write vorbis info */
-						/* if ogg_stream_packetin failed, then ogg_stream_flush return zero immediately */
-						ogg_stream_packetin (&stream->o.state, &packet_info);
-						ogg_stream_packetin (&stream->o.state, &packet_comm);
-						ogg_stream_packetin (&stream->o.state, &packet);
-						while (ogg_stream_flush (&stream->o.state, &opage))
-						{
-							if (!streamout_write (stream, &opage))
-							{
-								stream->o.flags |= COUT_FLAG_BREAK;
-								break;
-							}
-						}
-					}
-					else
-					{
-						// set error
-						stream->o.flags |= COUT_FLAG_BREAK;
-					}
-
-				}
+				// init streaout, write first packet (vorbis_info)
+				if (!streamout_init (stream))
+					stream->o.flags |= COUT_FLAG_BREAK;
+				ogg_stream_packetin (&stream->o.state, &packet);
 			}
 			else
+			if (stream->packet == 3)
+			{
+				ogg_packet packet_comm;
+				/* rebuild comment packet, write current */
+				vorbis_commentheader_out (&stream->vcomm, &packet_comm);
+				/* write vorbis info */
+				/* if ogg_stream_packetin failed, then ogg_stream_flush return zero immediately */
+				ogg_stream_packetin (&stream->o.state, &packet_comm);
+				ogg_stream_packetin (&stream->o.state, &packet);
+				while (ogg_stream_flush (&stream->o.state, &opage))
+				{
+					if (!streamout_write (stream, &opage))
+					{
+						stream->o.flags |= COUT_FLAG_BREAK;
+						break;
+					}
+				}
+				ogg_packet_clear (&packet_comm);
+
+			}
+			else
+			// second packet must be omitted
+			if (stream->packet != 2)
 			{
 				// normal copy
 				ogg_stream_packetin (&stream->o.state, &packet);
