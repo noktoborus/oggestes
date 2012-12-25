@@ -97,6 +97,15 @@ streamout_end (struct stream_cum *stream)
 	}
 	/* free structs */
 	ogg_stream_clear (&stream->o.state);
+	printf ("<finalize");
+	if (stream->o.flags & COUT_FLAG_INITED)
+		printf (" defined");
+	else
+		printf (" undefined");
+	if (stream->o.flags & COUT_FLAG_BREAK)
+		printf (" buggy>\n");
+	else
+		printf (" clean>\n");
 }
 
 bool
