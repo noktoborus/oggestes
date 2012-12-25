@@ -62,7 +62,8 @@ print_ogpack (ogg_packet *packet, vorbis_info *vinfo, vorbis_comment *vcom)
 			packet->packet, packet->bytes, packet->b_o_s, packet->e_o_s,
 			packet->granulepos, packet->packetno,
 			packet->packet[0], packet->packet[1], packet->packet[2], packet->packet[3]);
-	print_vorbis (packet, vinfo, vcom);
+	if (vinfo && vcom)
+		print_vorbis (packet, vinfo, vcom);
 }
 
 void
@@ -94,16 +95,25 @@ print_ogp (ogg_page *ogp, bool nog, ogg_stream_state *state, vorbis_info *vinfo,
 			);
 		if ((ogg_page_pageno (ogp) == 0 && !ogg_stream_init (state, ogg_page_serialno (ogp))) || true)
 		{
+			ogg_stream_pagein (state, ogp);
+			ogg_packet packet;
 			if (ogg_page_pageno (ogp) < 3 && !nog)
 			{
-				ogg_packet packet;
 				//printf ("HE\n");
 				//print_ogp (ogp, true);
-				ogg_stream_pagein (state, ogp);
 				if (ogg_stream_packetout (state, &packet) == 1)
 					print_ogpack (&packet, vinfo, vcom);
 				if (ogg_stream_packetout (state, &packet) == 1)
 					print_ogpack (&packet, vinfo, vcom);
+			}
+			else
+			{
+				size_t n = ogg_page_packets (ogp);
+				while (n --)
+				{
+					if (ogg_stream_packetout (state, &packet) == 1)
+						print_ogpack (&packet, NULL, NULL);
+				}
 			}
 		}
 	}
